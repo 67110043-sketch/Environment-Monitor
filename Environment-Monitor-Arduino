@@ -1,0 +1,226 @@
+#include <Wire.h>
+#include <DHT.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+
+// กำหนดขาอุปกรณ์
+#define DHTPIN 2
+#define DHTTYPE DHT11
+#define LDRPIN A0
+
+#define GREEN_LED 6
+#define YELLOW_LED 7
+#define RED_LED 8
+#define BUZZER 9
+
+// กำหนดค่าจอ OLED
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
+#define OLED_RESET -1
+
+DHT dht(DHTPIN, DHTTYPE);
+
+Adafruit_SSD1306 display(
+  SCREEN_WIDTH,
+  SCREEN_HEIGHT,
+  &Wire,
+  OLED_RESET
+);
+
+// กำหนดช่วงเวลาการอ่านข้อมูล
+unsigned long previousMillis = 0;
+const unsigned long interval = 2000;
+
+// กำหนดค่าเกณฑ์ตัวอย่าง
+const float TEMP_WARNING = 30.0;
+const float TEMP_DANGER = 35.0;
+
+const float HUM_WARNING = 70.0;
+const float HUM_DANGER = 80.0;
+
+// ต้องปรับตามวงจร LDR จริง
+const int LDR_DARK_THRESHOLD = 400;
+
+// ระดับสถานะ
+const int NORMAL = 0;
+const int WARNING = 1;
+const int DANGER = 2;
+
+void setIndicators(int level, bool nightMode) {
+  digitalWrite(GREEN_LED, LOW);
+  digitalWrite(YELLOW_LED, LOW);
+  digitalWrite(RED_LED, LOW);
+  digitalWrite(BUZZER, LOW);
+
+  if (level == NORMAL) {
+    digitalWrite(GREEN_LED, HIGH);
+  }
+  else if (level == WARNING) {
+    digitalWrite(YELLOW_LED, HIGH);
+  }
+  else if (level == DANGER) {
+    digitalWrite(RED_LED, HIGH);
+
+    // ส่งเสียงเฉพาะระดับอันตรายในโหมดกลางวัน
+    if (!nightMode) {
+      digitalWrite(BUZZER, HIGH);
+    }
+  }
+}
+
+int evaluateRisk(float temperature, float humidity) {
+  // ตรวจระดับอันตรายก่อน
+  if (temperature >= TEMP_DANGER ||
+      humidity >= HUM_DANGER) {
+    return DANGER;
+  }
+
+  // ตรวจระดับเฝ้าระวัง
+  if (temperature >= TEMP_WARNING ||
+      humidity >= HUM_WARNING) {
+    return WARNING;
+  }
+
+  return NORMAL;
+}
+
+const char* getStatusText(int level) {
+  if (level == DANGER) {
+    return "ALERT";
+  }
+
+  if (level == WARNING) {
+    return "WARNING";
+  }
+
+  return "NORMAL";
+}
+
+void showSensorError() {
+  // ไม่ใช้ข้อมูลที่อ่านผิดพลาดตัดสินใจ
+  digitalWrite(GREEN_LED, LOW);
+  digitalWrite(YELLOW_LED, LOW);
+  digitalWrite(RED_LED, LOW);
+  digitalWrite(BUZZER, LOW);
+
+  display.clearDisplay();
+  display.setCursor(0, 0);
+  display.println("SENSOR ERROR");
+  display.println("Check DHT11");
+  display.println("System cannot");
+  display.println("evaluate risk");
+  display.display();
+
+  Serial.println("ERROR: DHT11 read failed");
+}
+
+void setup() {
+  Serial.begin(9600);
+
+  pinMode(GREEN_LED, OUTPUT);
+  pinMode(YELLOW_LED, OUTPUT);
+  pinMode(RED_LED, OUTPUT);
+  pinMode(BUZZER, OUTPUT);
+
+  digitalWrite(GREEN_LED, LOW);
+  digitalWrite(YELLOW_LED, LOW);
+  digitalWrite(RED_LED, LOW);
+  digitalWrite(BUZZER, LOW);
+
+  dht.begin();
+
+  if (!display.begin(
+        SSD1306_SWITCHCAPVCC, 0x3C)) {
+    Serial.println("OLED initialization failed");
+
+    while (true) {
+      // หยุดเมื่อเริ่มต้นจอไม่สำเร็จ
+    }
+  }
+
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(0, 0);
+  display.println("Environment Monitor");
+  display.println("Starting system...");
+  display.display();
+
+  Serial.println("Environment Monitor Started");
+}
+
+void loop() {
+  unsigned long currentMillis = millis();
+
+  if (currentMillis - previousMillis >= interval) {
+    previousMillis = currentMillis;
+
+    // อ่านข้อมูลจากเซนเซอร์
+    float temperature = dht.readTemperature();
+    float humidity = dht.readHumidity();
+    int lightValue = analogRead(LDRPIN);
+
+    // ตรวจสอบข้อผิดพลาดของ DHT11
+    if (isnan(temperature) || isnan(humidity)) {
+      showSensorError();
+      return;
+    }
+
+    // ตัวอย่างนี้สมมติว่าค่า ADC ต่ำหมายถึงมืด
+    // ต้องตรวจสอบและปรับตามวงจร LDR จริง
+    bool nightMode =
+      (lightValue < LDR_DARK_THRESHOLD);
+
+    // ประเมินระดับความเสี่ยง
+    int riskLevel =
+      evaluateRisk(temperature, humidity);
+
+    // ควบคุม LED และ Buzzer
+    setIndicators(riskLevel, nightMode);
+
+    // แสดงข้อมูลบน OLED
+    display.clearDisplay();
+    display.setCursor(0, 0);
+
+    display.println("Environment Monitor");
+
+    display.print("Temp: ");
+    display.print(temperature, 1);
+    display.println(" C");
+
+    display.print("Humidity: ");
+    display.print(humidity, 1);
+    display.println(" %");
+
+    display.print("LDR ADC: ");
+    display.println(lightValue);
+
+    display.print("Mode: ");
+    display.println(nightMode ? "NIGHT" : "DAY");
+
+    display.print("Status: ");
+    display.println(getStatusText(riskLevel));
+
+    display.display();
+
+    // ส่งข้อมูลผ่าน Serial Monitor
+    Serial.print("Temperature: ");
+    Serial.print(temperature, 1);
+    Serial.println(" C");
+
+    Serial.print("Humidity: ");
+    Serial.print(humidity, 1);
+    Serial.println(" %RH");
+
+    Serial.print("LDR ADC: ");
+    Serial.println(lightValue);
+
+    Serial.print("Mode: ");
+    Serial.println(nightMode ? "NIGHT" : "DAY");
+
+    Serial.print("Risk Level: ");
+    Serial.println(getStatusText(riskLevel));
+
+    Serial.println("----------------------");
+  }
+}
